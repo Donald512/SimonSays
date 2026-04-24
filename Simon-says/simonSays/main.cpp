@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include <myFunctions.h>
+#include <func.h>
 #include <pitches.h>
 
 

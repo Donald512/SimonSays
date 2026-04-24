@@ -27,6 +27,8 @@ u8 colorArray[100] = {0};
 u8 currentStreak = 0;
 u8 lastUpdatedNum = 0;
 
+u16 colorNotes[numColors] = {NOTE_C4, NOTE_E4, NOTE_G4, NOTE_A4}; // r g b y
+
 Button testBtn(triggerBtn);
 my595 sRegs = {dataPin, clockPin, latchPin};
 
@@ -62,13 +64,14 @@ void setup(){
 
 u8 onLed = 0;
 u32 lastLedTS = millis();
-u8 ledDelay = 255;
-
+u8 ledOnDelay = 255;
+u8 ledOffDelay = 100;
+bool ledIsOn = false;
 
 // ! Continue tomorrow, remember to actually show the color in the colorArray, not the onLed
 void loop(){
     testBtn.watch();
-    /*Made it Buggy but i couldnt figure out why*/
+    /*Made it Buggy but i couldnt figure out why, still confused on why this block stopped readingBtns from functioning at all, even when didnt press it all*/
     // if (testBtn.wasPressed()){
     //     PORTD ^= (1 << 7);
     // }
@@ -80,23 +83,31 @@ void loop(){
             updateCurrentScore();
             currentActivity = showingPattern;
             onLed = 0;
+            ledIsOn = false;
         }   break;
         case showingPattern:{
-
             if (onLed == currentStreak){
                 onLed = 0;
                 // displayBuffer[colorIndex] = 0;
                 currentActivity = readingBtns;
             }
             else{
-                if (millis() - lastLedTS > ledDelay){
-                    displayBuffer[colorIndex] = (1 << colorArray[onLed]);
+                if (!ledIsOn && millis() - lastLedTS > ledOffDelay){    // NOTE: This is ledOffDelay, not ledOnDelay, using ledOnDelay inverts it 
+                    tone(buzzerPin, colorNotes[colorArray[onLed]]);
+                    displayBuffer[colorIndex] = (1 << colorArray[onLed]);   // turn on current led 
+                    lastLedTS = millis();
+                    ledIsOn = true;
+                }
+                else if (ledIsOn && millis() - lastLedTS > ledOnDelay){
+                    displayBuffer[colorIndex] = 0;   // turn off all current led 
+                    noTone(buzzerPin);
+                    ledIsOn = false;
                     lastLedTS = millis();
                     onLed++;
                 }
+
                 
             }   
-            
         }   break;
         case readingBtns:{
             if (testBtn.wasPressed()){
