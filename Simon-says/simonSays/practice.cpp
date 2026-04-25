@@ -22,7 +22,8 @@
 
 // tone stuff
 #define ONE_SECOND_MS 1000
-#define delay_Multiplier 1.3
+#define delay_Multiplier_S 1.3
+#define delay_Multiplier_F 1.5
 #define numSuccessNotes 4   // ! remember to change if change
 #define numFailureNotes 3   // !
 
@@ -31,6 +32,7 @@ void setupTimer2();
 void setupTimer1();
 void myTone(u16 note); 
 void endMyTone();
+void clearPresses();
 
 u8 colorArray[100] = {0};
 u8 currentStreak = 0;
@@ -42,14 +44,13 @@ Button colorBtns[numColors] = {Button(0), Button(1), Button(2), Button(3)};    /
 
 u16 gameOverSounds[] = {NOTE_C4, NOTE_G3, NOTE_E3};
 u16 successSounds[] = {NOTE_C4, NOTE_E4, NOTE_G4, NOTE_C5};
-u8 gamOverDuration[] = {5, 4, 2};
+u8 gameOverDuration[] = {5, 4, 2};
 u8 successDuration[] = {8, 8, 8, 4};
 
-Button testBtn(triggerBtn);
 my595 sRegs = {dataPin, clockPin, latchPin};
 
 
-enum activity {startup, addLed, showingPattern, readingBtns, levelPassed, levelFailed, flashCorrectLed};
+enum activity {addLed, showingPattern, readingBtns, levelPassed, levelFailed};
 activity currentActivity = addLed;
 
 
@@ -97,7 +98,7 @@ u8 toneIndex = 0;
 bool notePlaying;
 u16 noteOffDelay;
 u32 noteTS = millis();
-
+u8 correctLed;      // the led that the user was supposed to press
 
 
 void loop(){
@@ -144,6 +145,7 @@ void loop(){
         case readingBtns:{
             if (indexToEnter == currentStreak){
                 indexToEnter = 0;
+                toneIndex = 0;
                 displayBuffer[colorIndex] = 0;
                 btnPressedEvent = false;
                 currentActivity = levelPassed;
@@ -178,16 +180,18 @@ void loop(){
                     }
                     else{
                         if (pressedBtn == colorArray[indexToEnter]){
-                            for (u8 i = 0; i < numColors && !btnPressedEvent; i++){
-                                colorBtns[i].wasPressed();      // clear stored presses
-                            }                           
                             btnPressedEvent = false;
                             indexToEnter++;
                         }
                         else{
                             currentActivity = levelFailed;
+                            correctLed = colorArray[indexToEnter];
+                            toneIndex = 0;
+                            indexToEnter = 0;
+                            btnPressedEvent = false;
                         }
                     }
+                    clearPresses();
                 }
             }
         }   break;
@@ -199,7 +203,7 @@ void loop(){
             else{
                 if (!notePlaying){
                     myTone(successSounds[toneIndex]);
-                    noteOffDelay = delay_Multiplier * ONE_SECOND_MS / successDuration[toneIndex];
+                    noteOffDelay = delay_Multiplier_S * ONE_SECOND_MS / successDuration[toneIndex];
                     notePlaying = true;
                     noteTS = millis();
                 }
@@ -211,12 +215,26 @@ void loop(){
             }
         }   break;
         case levelFailed:{
-            if (toneIndex == numFailureNotes){
+            if (toneIndex >= numFailureNotes){
                 currentActivity = addLed;
                 toneIndex = 0;
+                currentStreak = 0;
             }
             else{
-                
+                if (!notePlaying){
+                    displayBuffer[colorIndex] = (1 << correctLed);
+                    myTone(gameOverSounds[toneIndex]);
+                    noteOffDelay = delay_Multiplier_F * ONE_SECOND_MS / gameOverDuration[toneIndex]; 
+                    notePlaying = true;
+                    noteTS = millis();
+                }
+                else if (notePlaying && millis() - noteTS > noteOffDelay){
+                    endMyTone();
+                    displayBuffer[colorIndex] = 0;
+                    notePlaying = false;
+                    toneIndex++;
+                }
+                clearPresses();
             }
         }   break;
     }
@@ -269,8 +287,6 @@ void setupTimer1(){
 }
 
 void myTone(u16 note){  
-    // only for specific notes. the only min and max notes used in this program are NOTE_E3 and NOTE_C5:     165Hz and 523Hz respectively 
-    // 165 Hz means it has to visit the ISR 330 times, 165 to turn on, and 165 to turn off
     // Timer1 best bet is 64 PRESCALER
     OCR1A = (FREQ / (2 * note)) - 1;    // 0 to OCR1A - 1 = OCR1A steps
     OCR1B = OCR1A;
@@ -280,6 +296,12 @@ void myTone(u16 note){
 void endMyTone(){
     TCCR1A &= ~(1 << COM1B0);   // changes it back to a normal GPIO pin
     dWrite(buzzerPin, LOW);
+}
+
+void clearPresses(){
+    for (u8 i = 0; i < numColors && !btnPressedEvent; i++){
+        colorBtns[i].wasPressed();      // clear stored presses
+    } 
 }
 
 /* Bug Log:
@@ -300,4 +322,5 @@ void endMyTone(){
     // ! Always check pinMode(), produces annoying bugs
     // ! Always check GND connections
 */
+
 

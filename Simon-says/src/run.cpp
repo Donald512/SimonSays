@@ -61,7 +61,6 @@ volatile u8 currentDigit = 0;
 volatile const uint8_t digitsPattern[10] =  {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
 
 // 244Hz
-volatile bool displayActive = true;
 ISR(TIMER2_OVF_vect){
     PORTB &= ~(1 << (latchPin - 8)); 
     msbShiftOut(sRegs, ~(1 << currentDigit)); 
@@ -289,14 +288,12 @@ void setupTimer1(){
 
 void myTone(u16 note){  
     // Timer1 best bet is 64 PRESCALER
-    displayActive = false;
     OCR1A = (FREQ / (2 * note)) - 1;    // 0 to OCR1A - 1 = OCR1A steps
     OCR1B = OCR1A;
     TCCR1A |= (1 << COM1B0);    //  Enable the toggle OC1B on compare match
 }
 
 void endMyTone(){
-    displayActive = true;
     TCCR1A &= ~(1 << COM1B0);   // changes it back to a normal GPIO pin
     dWrite(buzzerPin, LOW);
 }
