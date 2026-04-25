@@ -14,10 +14,10 @@
 #define colorIndex 4
 
 // Pins
-#define buzzerPin   4
-#define latchPin    10
+#define buzzerPin   10
 #define clockPin    11
 #define dataPin     12 
+#define latchPin    8
 #define triggerBtn  0
 
 // tone stuff
@@ -70,22 +70,14 @@ ISR(TIMER2_OVF_vect){
     if (currentDigit >= numDigits) currentDigit = 0;
 }
 
-// for tone
-volatile bool toneActive = false;
-ISR(TIMER1_COMPA_vect){
-    if (toneActive){
-        PORTD ^= (1 << buzzerPin);
-    }
-}
-
 void setup(){
     DDRD |= (1 << 7);
     setupTimer2();
     setupTimer1();
     randomSeed(analogRead(A0));
-    for (u8 i = 10; i < 13; i++){ // Loop through pins required for 595
-        pinMode(i, OUTPUT);
-    }
+    pinMode(latchPin, OUTPUT);
+    pinMode(clockPin, OUTPUT);
+    pinMode(dataPin, OUTPUT);
     pinMode(buzzerPin, OUTPUT);
     dWrite(buzzerPin, LOW);
 }
@@ -219,6 +211,13 @@ void loop(){
             }
         }   break;
         case levelFailed:{
+            if (toneIndex == numFailureNotes){
+                currentActivity = addLed;
+                toneIndex = 0;
+            }
+            else{
+                
+            }
         }   break;
     }
 
@@ -256,12 +255,14 @@ void setupTimer2(){
 void setupTimer1(){
     cli();
 
-    TCCR1A = 0;     // CTC mode
+    // TCCR1A = 0;     // CTC mode
+    TCCR1A = (1 << COM1B0);   // Toggle OC1B on compare match, which is what we want
     TCCR1B = (1 << WGM12);  // CTC with OCR1A as top
     // TCCR1B |= (1 << CS10);    // 1 PRESCALER
     TCCR1B |= (1 << CS11) | (1 << CS10);    // 64 PRESCALER
-    TIMSK1 = (1 << OCIE1A);     // Enable compare match A
+    // TIMSK1 = (1 << OCIE1A);     // Enable compare match A  . commenting cause the cpu is not involved anymore
     OCR1A = 65535;      // starting value
+    OCR1B = 65535;      // has to be less than or equal to OCR1A
 
     sei();
 
@@ -271,14 +272,14 @@ void myTone(u16 note){
     // only for specific notes. the only min and max notes used in this program are NOTE_E3 and NOTE_C5:     165Hz and 523Hz respectively 
     // 165 Hz means it has to visit the ISR 330 times, 165 to turn on, and 165 to turn off
     // Timer1 best bet is 64 PRESCALER
-    toneActive = true;
     OCR1A = (FREQ / (2 * note)) - 1;    // 0 to OCR1A - 1 = OCR1A steps
+    OCR1B = OCR1A;
+    TCCR1A |= (1 << COM1B0);    //  Enable the toggle OC1B on compare match
 }
 
 void endMyTone(){
-    OCR1A = 65535;
-    toneActive = false;
-    PORTD &= ~(1 << buzzerPin);     // turn off in case last toggle was on
+    TCCR1A &= ~(1 << COM1B0);   // changes it back to a normal GPIO pin
+    dWrite(buzzerPin, LOW);
 }
 
 /* Bug Log:
@@ -291,5 +292,12 @@ void endMyTone(){
 
     The loop was very responsive, causing it to store button presses and when it was read, i read the previous button presses and it messed up the logic. very sneaky bug
         fix -> I cleared all the buttons before the next round
+
+    The tone worked, but it sounded grainy, which was most likely due to the ISR in Timer2, when we tried to generate a tone, the two most likely tried to clash with each other
+        fix -> changed from a software interrupt to a hardware interrupt, instead of the cpu running a task or waiting for timer2's ISR to finish, it immediately toggles the pin
+        Could have used OC1A which is Digital pin 9, but my pin 9 on my atmega328p chip is broken, so i used OC1B (on Digital pin 10), and switched latchPin to DP8(PB0)
+
+    // ! Always check pinMode(), produces annoying bugs
+    // ! Always check GND connections
 */
 

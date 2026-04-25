@@ -35,7 +35,7 @@ void msbShiftOut(my595 &shiftReg, u8 pattern){
 
 }
 
-void dWrite(uint8_t pin, bool value){
+void dWrite(u8 pin, bool value){
 	if (pin > A5) return;
 	if (pin < 8){
 		if (value) 	PORTD |= ( 1 << pin);
