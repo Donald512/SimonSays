@@ -1,310 +1,249 @@
 #include <Arduino.h>
 #include <func.h>
+#include <btn.h>
 #include <pitches.h>
 
-
-// No Extra Lives
-// 5 digits, 2 for current streak, 2 for high score, 1 for showing patterns
-
 #define memPersist static
+#define PRESCALER 64
+#define FREQ F_CPU/PRESCALER
+// red = 0, yellow = 3, goes r -> g -> b -> y
 
 #define numDigits 5
 #define numColors 4
 #define numBtns 4
+#define colorIndex 4
 
-// Colors
-#define red      0
-#define green    1
-#define blue     2
-#define yellow   3      
-
-#define colorsPlace 4
-#define numSuccessNotes 4 // ! Risk of being forgotten to be changed if array size changes
-#define numGameOverNotes 3 // ! Risk of being forgotten to be changed if array size changes
-// Not using serial, also dont have to worry abt upload error since i plug the standalone chip into the bootloader
-
-const uint8_t digitsPattern[10] =  {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
-u16 colorSounds[numColors] = {NOTE_C4, NOTE_E4, NOTE_G4, NOTE_A4}; // r g b y
-u16 gameOverSounds[] = {NOTE_C4, NOTE_G3, NOTE_E3};
-u16 successSounds[numSuccessNotes] = {NOTE_C4, NOTE_E4, NOTE_G4, NOTE_C5};
-uint16_t gamOverDuration[] = {5, 4, 2};
-uint16_t successDuration[] = {8, 8, 8, 4};
-u8 toneDelay = 300;
-u8 blinkDelay = 200;
-u8 slightDelay = 200;
-u8 debounceDelay = 50;
-u8 numGameOverBlink = 6;  // todo check if 6 toggles == 3 blinks
-
-// 0-1 is Highscore, 2-3 is current streak, 4 is led to display
-volatile u8 displayBuffer[5] = {0};
-u8 brightness[5] = {0};
-
-
-// :-: Pins
-// u8 btns[numBtns] = {0, 1, 2, 3};
-#define buzzerPin   4
-#define latchPin    10
+// Pins
+#define buzzerPin   10
 #define clockPin    11
 #define dataPin     12 
+#define latchPin    7
 
+// tone stuff
+#define ONE_SECOND_MS 1000
+#define delay_Multiplier_S 1.3
+#define delay_Multiplier_F 1.5
+#define numSuccessNotes 4   // ! remember to change if change
+#define numFailureNotes 3   // !
 
-btnInfo btnObjs[numBtns] = {0}; // alloc memory for numbtns we got
-// btnInfo *btnObjs[numBtns];
-u8 numCreatedBtns = 0;
+void updateCurrentScore();
+void setupTimer2();
+void setupTimer1();
+void myTone(u16 note); 
+void endMyTone();
+void clearPresses();
 
 u8 colorArray[100] = {0};
-u8 lastUpdatedNum;
 u8 currentStreak = 0;
+u8 lastUpdatedNum = 0;
 
-bool RUNNING = false;
-enum activity {startup, showingPattern, readingBtns, levelPassed, levelFailed, flashCorrectLed};
-activity currentActivity = startup;
+u16 colorNotes[numColors] = {NOTE_C4, NOTE_E4, NOTE_G4, NOTE_A4}; // r g b y
+Button colorBtns[numColors] = {Button(0), Button(1), Button(2), Button(3)};    // alloc space for 4 buttons
+
+
+u16 gameOverSounds[] = {NOTE_C4, NOTE_G3, NOTE_E3};
+u16 successSounds[] = {NOTE_C4, NOTE_E4, NOTE_G4, NOTE_C5};
+u8 gameOverDuration[] = {5, 4, 2};
+u8 successDuration[] = {8, 8, 8, 4};
+
 my595 sRegs = {dataPin, clockPin, latchPin};
 
 
-// 62500Hz
-ISR(TIMER0_OVF_vect){
-    memPersist u8 nTimesVisitedISR = 0;
-    memPersist u8 currentDigit = 0;
-    if (nTimesVisitedISR == 244){   // This only happens once every overflow, so actual update frequency is ~244.1Hz, each digit has a frequency of ~48.8Hz
-        PORTB &= ~(1 << (latchPin - 8));    // set latch low, not using dWrite here to save clock cycles from function overhead
-        msbShiftOut(sRegs, ~(1 << currentDigit));   // Bring the digit to GND first, will be pushed to second reg
-        msbShiftOut(sRegs, displayBuffer[currentDigit]);    // send the current pattern
-        currentDigit++;
-    }
-    if (currentDigit == numDigits){
-        currentDigit = 0;
-    }
-    nTimesVisitedISR++;
-}
+enum activity {addLed, showingPattern, readingBtns, levelPassed, levelFailed};
+activity currentActivity = addLed;
 
+
+// For display
+// 0-1 is Highscore, 2-3 is current streak, 4 is led to display
+volatile u8 displayBuffer[5] = {0};
+volatile u8 currentDigit = 0;
+volatile const uint8_t digitsPattern[10] =  {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
+
+// 244Hz
+ISR(TIMER2_OVF_vect){
+    PORTD &= ~(1 << latchPin); 
+    msbShiftOut(sRegs, ~(1 << currentDigit)); 
+    msbShiftOut(sRegs, displayBuffer[currentDigit]); 
+    PORTD |= (1 << latchPin); 
+    
+    currentDigit++;
+    if (currentDigit >= numDigits) currentDigit = 0;
+}
 
 void setup(){
-    delay(1000);
+    setupTimer2();
+    setupTimer1();
     randomSeed(analogRead(A0));
-    for (u8 i = 0; i < 4; i++){ // Loop through buttons
-        setupBtn(i);
-    }
-    for (u8 i = 10; i < 13; i++){ // Loop through pins required for 595
-        pinMode(i, OUTPUT);
-    }
+    pinMode(latchPin, OUTPUT);
+    pinMode(clockPin, OUTPUT);
+    pinMode(dataPin, OUTPUT);
     pinMode(buzzerPin, OUTPUT);
     dWrite(buzzerPin, LOW);
-
-    RUNNING = true;
 }
 
+u8 onLed = 0;
+u32 lastLedTS = millis();
+u8 ledOnDelay = 255;
+u8 ledOffDelay = 100;
+bool ledIsOn = false;
 
-// todo check how time stamps and flags get initialized for the first time/ led 
-// new todo tried to fix by adding startup enum
+bool btnPressedEvent = false;
+bool flashedPressedLed = false;
+u8 pressedBtn;  
+u8 indexToEnter;
 
-// prefix of i means incrementer, TS means timestamp
+u8 toneIndex = 0;
+bool notePlaying;
+u16 noteOffDelay;
+u32 noteTS = millis();
+u8 correctLed;      // the led that the user was supposed to press
 
-// showingPattern
-bool displayNextLed = false;
-u32 toneStart1TS = millis();
-u32 slightDelay1TS = millis();
-u8 iLed = 0;
-
-// readingBtns
-u8 iBtnLed = 0;
-u8 iBtnLooper = 0;
-u32 toneStart2TS = millis();
-bool btnPressed = false;
-u8 pressedBtn = 255; // anything >= numCreatedBtns
-bool validatePress = false;
-bool acceptingInput = true;
-
-// levelPassed
-u8 iNote3 = 0;
-u8 toneStart3TS = millis();
-u32 slightDelay3TS = millis();
-bool playNote3 = false;
-
-// levelFailed
-u8 iNote4 = 0;
-u8 toneStart4TS = millis();
-u32 slightDelay4TS = millis();
-bool playNote4 = false;
-
-// flashCorrectLed
-u8 iBlink5 = 0;
-u32 toneStart5TS = millis();
 
 void loop(){
-    while(RUNNING){
-        updateBtns();
-        updateCurrentScore();
-        switch(currentActivity){
-            // todo 60% done with this part
-            case startup:{
-                displayNextLed = false;
-                toneStart1TS = millis();
-                slightDelay1TS = millis();
-                u8 iLed = 0;
-                currentStreak = 0;
-            }   break;
+    for (u8 i = 0; i < numColors; i++){
+        colorBtns[i].watch();
+    }
+    switch (currentActivity){
+        case addLed:{
+            u8 randomLed = random(0, numColors);     // max exclusive
+            colorArray[currentStreak] = randomLed;
+            currentStreak++;
+            updateCurrentScore(); 
             
-            case showingPattern:{
-                if (iLed == currentStreak){
-                    iLed = 0; // reset for next round
-                    currentActivity = readingBtns;
+            currentActivity = showingPattern;
+            onLed = 0;
+            ledIsOn = false;
+            lastLedTS = millis();   // Because the next state needs it to be refreshed
+        }   break;
+        case showingPattern:{
+            if (onLed == currentStreak){
+                onLed = 0;
+                // no need to reset ledIsOn because the else block is usually the last to run, and does it already 
+                displayBuffer[colorIndex] = 0;
+                currentActivity = readingBtns;
+                lastLedTS = millis();
+                btnPressedEvent = false;
+                flashedPressedLed = false;
+                clearPresses(); // made me fail if i pressed a btn mid display, or could be use to cheat, to remember one less color, the first one
+            }
+            else{
+                if (!ledIsOn && millis() - lastLedTS > ledOffDelay){    // NOTE: This is ledOffDelay, not ledOnDelay, using ledOnDelay inverts it 
+                    displayBuffer[colorIndex] = (1 << colorArray[onLed]);   // turn on current led 
+                    myTone(colorNotes[colorArray[onLed]]);
+                    lastLedTS = millis();
+                    ledIsOn = true;
                 }
-                else{
-                    if (millis() - slightDelay1TS > slightDelay){
-                        displayNextLed = true;
-                    }
-                    else if (displayNextLed){
-                        displayBuffer[colorsPlace] = (1 << iLed);
-                        tone(buzzerPin, colorSounds[iLed]);
-                        toneStart1TS = millis();
-                        displayNextLed = false;
-                    }
-                    else if (millis() - toneStart1TS > toneDelay && !displayNextLed /* Low-key dont think i need this*/){ // todo check if second clause is required 
-                        // displayBuffer[4] = displayBuffer[4] ^ (1 << colorArray[i]); // colorArray is full of numbers from 0 to 4, and each num reperesents the color to flash, toggle
-                        displayBuffer[4] = 0;   // turn everything off
-                        noTone(buzzerPin);
-                        slightDelay1TS = millis();
-                        iLed++;
+                else if (ledIsOn && millis() - lastLedTS > ledOnDelay){
+                    endMyTone();
+                    displayBuffer[colorIndex] = 0;   // turn off all current led 
+                    ledIsOn = false;
+                    lastLedTS = millis();
+                    onLed++;
+                }
+            }   
+        }   break;
+        case readingBtns:{
+            if (indexToEnter == currentStreak){
+                indexToEnter = 0;
+                toneIndex = 0;
+                displayBuffer[colorIndex] = 0;
+                btnPressedEvent = false;
+                currentActivity = levelPassed;
+                lastLedTS = millis();
+            }
+            else{
+                for (u8 i = 0; i < numColors && !btnPressedEvent; i++){
+                    if (colorBtns[i].wasPressed()){
+                        btnPressedEvent = true;
+                        pressedBtn = i;
+                        lastLedTS = millis();
+                        ledIsOn = false;
+                        flashedPressedLed = false;
                     }
                 }
-                // C'est tres difficile
-            }   break;
-
-            case readingBtns:{
-                if (iBtnLed == currentStreak){
-                    iBtnLed = 0;
-                    currentStreak++;
-                    currentActivity = levelPassed;
-                    // toneStart1TS = millis();
-                    toneStart3TS = millis();
-                    playNote3 = true;
-                }
-                else{                    
-                    if (iBtnLooper == numCreatedBtns){
-                        iBtnLooper = 0;
+                if (btnPressedEvent){
+                    // blink and tone the pressed led 
+                    if (!flashedPressedLed){
+                        if (!ledIsOn && millis() - lastLedTS > ledOffDelay){
+                            displayBuffer[colorIndex] = (1 << pressedBtn);   // turn on btn led 
+                            myTone(colorNotes[pressedBtn]);
+                            lastLedTS = millis();
+                            ledIsOn = true;
+                        }
+                        else if (ledIsOn && millis() - lastLedTS > ledOnDelay){
+                            endMyTone();
+                            displayBuffer[colorIndex] = 0;   // turn off all current led 
+                            ledIsOn = false;
+                            lastLedTS = millis();
+                            flashedPressedLed = true;
+                        }
                     }
-                    if (acceptingInput && wasPressed(btnObjs[iBtnLooper])){   // todo once this line runs, it becomes false and only runs once unless the user keeps pressing the button or any other buttons
-                        acceptingInput = false;     // this makes it only run once per iBtnLed
-                        btnPressed = true;
-                        displayBuffer[colorsPlace] = (1 << iBtnLooper);
-                        tone(buzzerPin, colorSounds[iBtnLooper]);
-                        toneStart2TS = millis();    // todo check if this block runs once, or else toneStart2TS might keep resetting to millis and the tone will never stop
-                        // btnPressed = iBtnLooper;
-                        pressedBtn = iBtnLooper;
-                    }
-                    if (btnPressed && millis() - toneStart2TS > toneDelay){
-                        displayBuffer[colorsPlace] = 0; // turn off leds
-                        noTone(buzzerPin);
-                        validatePress = true;
-                    }
-                    if (validatePress ){
-                        if (pressedBtn == colorArray[iBtnLed]){
-                            iBtnLed++;
-                            // reset the flags
-                            acceptingInput = true;
-                            validatePress = false;
-                            btnPressed = false;
+                    else{
+                        if (pressedBtn == colorArray[indexToEnter]){
+                            btnPressedEvent = false;
+                            flashedPressedLed = false;
+                            indexToEnter++;
                         }
                         else{
                             currentActivity = levelFailed;
+                            correctLed = colorArray[indexToEnter];
+                            notePlaying = false;
+                            toneIndex = 0;
+                            indexToEnter = 0;
+                            lastLedTS = millis();
+                            ledIsOn = false;
+                            btnPressedEvent = false;
                         }
                     }
-                    iBtnLooper++;
+                    // clearPresses();
                 }
-            }   break;
-
-            case levelPassed:{
-                if (iNote3 == numSuccessNotes){
-                    iNote3 = 0;
-                    playNote3 = false;
-                    toneStart1TS = millis();
-                    currentActivity = showingPattern;
-                }
-                else{
-                    if (playNote3){
-                        tone(buzzerPin, successSounds[iNote3]);
-                    }
-                    if (millis() - toneStart3TS > toneDelay){
-                        playNote3 = false;
-                        noTone(buzzerPin);
-                    }
-                    if (millis() - slightDelay3TS > slightDelay){
-                        playNote3 = true;
-                        iNote3++;
-                    }
-                }
-            }   break;
-
-
-            case levelFailed:{
-                if (iNote4 == numGameOverNotes){
-                    iNote4 = 0;
-                    playNote4 = false;
-                    toneStart5TS = millis();
-                    currentActivity = showingPattern;
-                }
-                if (playNote4){
-                    tone(buzzerPin, successSounds[iNote4]);
-                }
-                if (millis() - toneStart4TS > toneDelay){
-                    playNote4 = false;
-                    noTone(buzzerPin);
-                }
-                if (millis() - slightDelay4TS > slightDelay){
-                    playNote4 = true;
-                    iNote4++;
-                }
-            }   break;
-
-            case flashCorrectLed:{
-                if (iBlink5 == numGameOverBlink){
-                    iBlink5 = 0;
-                    displayBuffer[colorsPlace] = 0;
-                    currentActivity = startup;
-                }
-                else{
-                    if (millis() - toneStart5TS > slightDelay){
-                        displayBuffer[colorsPlace] = displayBuffer[colorsPlace] ^ (1 << colorArray[iBtnLed]); 
-                    }
-                }
-            }   break;
-
-        }
-    }
-}
-void setupBtn(u8 pin){
-    // Alr created space for 5 btns in global
-    pinMode(pin, INPUT_PULLUP);
-    btnObjs[numCreatedBtns].btnPin = pin;
-    btnObjs[numCreatedBtns].lastCheckedState = false; // when its first created its off
-    // btnObjs[numCreatedBtns] = &btn; // Not useful
-    numCreatedBtns++;
-}
-
-void updateBtns(){
-    for (u8 i = 0; i < numCreatedBtns; i++){
-        if (millis() - btnObjs[i].lastCheckedTime > debounceDelay){
-            bool currentState = dRead(btnObjs[i].btnPin);
-            if (currentState != btnObjs[i].lastCheckedState){
-                btnObjs[i].lastCheckedState = currentState;
-                if (currentState == LOW){
-                    btnObjs[i].pressed = true;
-                }
-                
-                btnObjs[i].lastCheckedTime = millis();
-
             }
-        }
+        }   break;
+        case levelPassed:{
+            if (toneIndex == numSuccessNotes){
+                currentActivity = addLed;
+                toneIndex = 0;
+                lastLedTS = millis();
+            }
+            else{
+                if (!notePlaying){
+                    myTone(successSounds[toneIndex]);
+                    noteOffDelay = delay_Multiplier_S * ONE_SECOND_MS / successDuration[toneIndex];
+                    notePlaying = true;
+                    noteTS = millis();
+                }
+                else if (notePlaying && millis() - noteTS > noteOffDelay){
+                    endMyTone();
+                    notePlaying = false;
+                    toneIndex++;
+                }
+            }
+        }   break;
+        case levelFailed:{
+            if (toneIndex == numFailureNotes){
+                currentActivity = addLed;
+                toneIndex = 0;
+                currentStreak = 0;
+            }
+            else{
+                if (!notePlaying){
+                    displayBuffer[colorIndex] = (1 << correctLed);
+                    myTone(gameOverSounds[toneIndex]);
+                    noteOffDelay = delay_Multiplier_F * ONE_SECOND_MS / gameOverDuration[toneIndex]; 
+                    notePlaying = true;
+                    noteTS = millis();
+                }
+                else if (notePlaying && millis() - noteTS > noteOffDelay){
+                    endMyTone();
+                    displayBuffer[colorIndex] = 0;
+                    notePlaying = false;
+                    toneIndex++;
+                }
+                clearPresses();
+            }
+        }   break;
     }
-}
 
-bool wasPressed(btnInfo &btn){
-    if (btn.pressed){
-        btn.pressed = false;
-        return true;
-    }
-    return false;
 }
 
 void updateCurrentScore(){
@@ -312,7 +251,7 @@ void updateCurrentScore(){
         return;
     }
     else{
-        lastUpdatedNum == currentStreak;
+        lastUpdatedNum = currentStreak;
         u8 firstDigit = currentStreak/10;
         u8 secondDigit = currentStreak - (firstDigit * 10);  // minus faster than modulus
 
@@ -327,34 +266,65 @@ void updateCurrentScore(){
     }
 }
 
-/* Pseudocode
-:-: 
-Light corresponding LED turn by turn in array
-After certain delay, turn off LED and stop tone, for blink effect, then start the other, maybe add a delay between leds 
-Then when the last led for current turn is reached, enter waiting for user input mode
+void setupTimer2(){
+    cli();
+    TCCR2A = 0; 
+    // TCCR2B = (1 << CS22); // 64 PRESCALER (Fires ~976 times/sec)
+    TCCR2B = (1 << CS22) | (1 << CS21); // 256 PRESCALER (Fires ~244 times/sec)
+    TIMSK2 = (1 << TOIE2); 
+    sei();
+}
+
+void setupTimer1(){
+    cli();
+
+    // TCCR1A = 0;     // CTC mode
+    TCCR1A = (1 << COM1B0);   // Toggle OC1B on compare match, which is what we want
+    TCCR1B = (1 << WGM12);  // CTC with OCR1A as top
+    // TCCR1B |= (1 << CS10);    // 1 PRESCALER
+    TCCR1B |= (1 << CS11) | (1 << CS10);    // 64 PRESCALER
+    // TIMSK1 = (1 << OCIE1A);     // Enable compare match A  . commenting cause the cpu is not involved anymore
+    OCR1A = 65535;      // starting value
+    OCR1B = 65535;      // has to be less than or equal to OCR1A
+
+    sei();
+
+}
+
+void myTone(u16 note){  
+    // Timer1 best bet is 64 PRESCALER
+    TCNT1 = 0;   // reset the timer so that i can start counting up to OCR1A immediately
+    OCR1A = (FREQ / (2 * note)) - 1;    // 0 to OCR1A - 1 = OCR1A steps
+    OCR1B = OCR1A;
+    TCCR1A |= (1 << COM1B0);    //  Enable the toggle OC1B on compare match
+}
+
+void endMyTone(){
+    TCCR1A &= ~(1 << COM1B0);   // changes it back to a normal GPIO pin
+    dWrite(buzzerPin, LOW);
+}
+
+void clearPresses(){
+    for (u8 i = 0; i < numColors && !btnPressedEvent; i++){
+        colorBtns[i].wasPressed();      // clear stored presses
+    } 
+}
+
+/* Bug Log:
+    Using a ISR frequency of 62500 Hz caused loop() to not run 
+        fix -> Changed to PRESCALER of 256. I used 62500Hz so i could use the same vector for other things but it didnt give brain to other functions
+
+    Using tone broke my logic completely, caused confusing unrelated bugs like the display blinking currentStreak times, instead of the Leds, this is because tone also uses timer2
+        fix ->  Going to create a myTone() function, that is only "closely" accurate for the notes used in this game, which are smaller notes, so i dont have to have a very high resolution
 
 
-:-: reading input logic:
-loop through all buttons
-if anyone is pressed
-light the corresponding led and sound tone
-wait some time (blink effect)
-turn off
-if button is the right one
-    increment iBtnLed and repeat till currentstreak
-else
-    enter failed enum, to make it cleaner, dont wanna put everything in else
+    The loop was very responsive, causing it to store button presses and when it was read, i read the previous button presses and it messed up the logic. very sneaky bug
+        fix -> I cleared all the buttons before the next round
 
-:-: failed:
-    toggle the corresponding led 3 times (or blink to be simpler) and sound note everytime, 
-*/
+    The tone worked, but it sounded grainy, which was most likely due to the ISR in Timer2, when we tried to generate a tone, the two most likely tried to clash with each other
+        fix -> changed from a software interrupt to a hardware interrupt, instead of the cpu running a task or waiting for timer2's ISR to finish, it immediately toggles the pin
+        Could have used OC1A which is Digital pin 9, but my pin 9 on my atmega328p chip is broken, so i used OC1B (on Digital pin 10), and switched latchPin to DP8(PB0)
 
-/* Atmega connections
-Reset to 10K to +ve rail
-10nF accross pin 7 (vcc to +ve rail) and pin 8 (gnd to -ve rail)
-crystal accross pin 9 and pin 10
-22pF from pin9 to -ve rail 
-22pF from pin10 to -ve rail
-pin 20 AVCC to +ve rail
-pin 22 GND to -ve rail 
+    // ! Always check pinMode(), produces annoying bugs
+    // ! Always check GND connections
 */

@@ -17,8 +17,7 @@
 #define buzzerPin   10
 #define clockPin    11
 #define dataPin     12 
-#define latchPin    8
-#define triggerBtn  0
+#define latchPin    7
 
 // tone stuff
 #define ONE_SECOND_MS 1000
@@ -62,17 +61,16 @@ volatile const uint8_t digitsPattern[10] =  {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D,
 
 // 244Hz
 ISR(TIMER2_OVF_vect){
-    PORTB &= ~(1 << (latchPin - 8)); 
+    PORTD &= ~(1 << latchPin); 
     msbShiftOut(sRegs, ~(1 << currentDigit)); 
     msbShiftOut(sRegs, displayBuffer[currentDigit]); 
-    PORTB |= (1 << (latchPin - 8)); 
+    PORTD |= (1 << latchPin); 
     
     currentDigit++;
     if (currentDigit >= numDigits) currentDigit = 0;
 }
 
 void setup(){
-    DDRD |= (1 << 7);
     setupTimer2();
     setupTimer1();
     randomSeed(analogRead(A0));
@@ -105,26 +103,28 @@ void loop(){
     for (u8 i = 0; i < numColors; i++){
         colorBtns[i].watch();
     }
-    /*Made it Buggy but i couldnt figure out why, still confused on why this block stopped readingBtns from functioning at all, even when didnt press it all*/
-    // if (testBtn.wasPressed()){
-    //     PORTD ^= (1 << 7);
-    // }
     switch (currentActivity){
         case addLed:{
             u8 randomLed = random(0, numColors);     // max exclusive
             colorArray[currentStreak] = randomLed;
             currentStreak++;
-            updateCurrentScore();
+            updateCurrentScore(); 
+            
             currentActivity = showingPattern;
             onLed = 0;
             ledIsOn = false;
-            lastLedTS = millis();
+            lastLedTS = millis();   // Because the next state needs it to be refreshed
         }   break;
         case showingPattern:{
             if (onLed == currentStreak){
                 onLed = 0;
+                // no need to reset ledIsOn because the else block is usually the last to run, and does it already 
                 displayBuffer[colorIndex] = 0;
                 currentActivity = readingBtns;
+                lastLedTS = millis();
+                btnPressedEvent = false;
+                flashedPressedLed = false;
+                clearPresses(); // made me fail if i pressed a btn mid display, or could be use to cheat, to remember one less color, the first one
             }
             else{
                 if (!ledIsOn && millis() - lastLedTS > ledOffDelay){    // NOTE: This is ledOffDelay, not ledOnDelay, using ledOnDelay inverts it 
@@ -181,17 +181,21 @@ void loop(){
                     else{
                         if (pressedBtn == colorArray[indexToEnter]){
                             btnPressedEvent = false;
+                            flashedPressedLed = false;
                             indexToEnter++;
                         }
                         else{
                             currentActivity = levelFailed;
                             correctLed = colorArray[indexToEnter];
+                            notePlaying = false;
                             toneIndex = 0;
                             indexToEnter = 0;
+                            lastLedTS = millis();
+                            ledIsOn = false;
                             btnPressedEvent = false;
                         }
                     }
-                    clearPresses();
+                    // clearPresses();
                 }
             }
         }   break;
@@ -199,6 +203,7 @@ void loop(){
             if (toneIndex == numSuccessNotes){
                 currentActivity = addLed;
                 toneIndex = 0;
+                lastLedTS = millis();
             }
             else{
                 if (!notePlaying){
@@ -215,7 +220,7 @@ void loop(){
             }
         }   break;
         case levelFailed:{
-            if (toneIndex >= numFailureNotes){
+            if (toneIndex == numFailureNotes){
                 currentActivity = addLed;
                 toneIndex = 0;
                 currentStreak = 0;
@@ -288,6 +293,7 @@ void setupTimer1(){
 
 void myTone(u16 note){  
     // Timer1 best bet is 64 PRESCALER
+    TCNT1 = 0;   // reset the timer so that i can start counting up to OCR1A immediately
     OCR1A = (FREQ / (2 * note)) - 1;    // 0 to OCR1A - 1 = OCR1A steps
     OCR1B = OCR1A;
     TCCR1A |= (1 << COM1B0);    //  Enable the toggle OC1B on compare match
@@ -322,5 +328,3 @@ void clearPresses(){
     // ! Always check pinMode(), produces annoying bugs
     // ! Always check GND connections
 */
-
-
