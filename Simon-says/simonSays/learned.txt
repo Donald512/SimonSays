@@ -1,0 +1,77 @@
+
+#include <arduino.h>
+
+u8 aRead(u8 pin);
+
+volatile u8 result;
+#define  ADMUXSetupSettings  (1 << REFS1) | (1 << REFS0)  /*use internal 1.1v as referece */ | (1 << ADLAR) // make it left adjusted, so that we only grab ADCH 
+
+void setup(){
+    ADMUX = ADMUXSetupSettings;
+    // ADCSRA = (1 << ADPS2);      // 16 prescaler
+    ADCSRA = (1 << ADPS0);      // 2 prescaler
+    Serial.begin(9600);
+    
+
+}
+
+void loop(){
+    Serial.println(aRead(A0));
+    delay(100);
+}
+
+u8 aRead(u8 pin){
+    if (pin > A5) return 0;
+    ADMUX = ADMUXSetupSettings | (pin - A0);
+    
+    ADCSRA |= (1 << ADEN);  // turn it on
+    
+    ADCSRA |= (1 << ADSC);  // have to write to one to start conversion
+    
+    // 3 methods
+    while (ADCSRA & (1 << ADSC)); // loop until ADSC bit becomes 0
+    // ADCSRA &= ~(1 << ADEN);  // turn it off when done no need to turn off 
+    return ADCH;
+    // // or replace with
+    // ADCSRA |= (1 << ADIE);   // ADC enable interrupt
+
+}
+// ORRR
+// ISR(ADC_vect){
+//     result = ADCH;
+// }
+
+
+/*
+    Analog input channel i.e Aref or Avcc is selected by writing to the MUX buts in ADMUX    
+    Enable ADC by setting the ADC enable bit, ADEN in ADCSRA
+    ADEN MUST be set, 
+    ADC doesnt consume power when ADEN is cleared 
+
+    ADC returns the 10 bit result in ADCH and ADCL, with bit 8-9 in ADCH, and 0-7 in ADCL, can be changed bty setting the ADLAR in ADMUX, but we dont care abt that 
+    NOTE: thinking of making it left adjusted tho, since i dont need crazy precision (only 8 bits), and just read ADCH like the datasheet says, but i have to make it left adjusted 
+    0000 0011 1000 1000 which is the normal 10-bit result with a decimal value of 904 becomes 1110 0010 which is 226 in decimal, 904/1024 = 226/256
+
+    Dont think this matters to me but if right adjusted, we have to read ADCL first 
+    
+    we start a conversion(reading) by disabling the power reduction ADC bit PRADC, and enabling the ADC start conversion bit ADSC, ADSC lives in ADCSRA but PRADC is somewhere else
+    NOTE: check if we need to disable PRADC, or if its already disabled
+    ADSC stays HIGH as long as conversion is happening,  and is cleared by hardware when fisnished, it will finish the current conversion before moving to a new channel if one happens to be selected mid conversion
+
+    Auto triggering?
+        enabled by enabling the ADATE bit in ADCSRA
+        trigger source selected by choosing which ADTS2:0 bits are on in ADCSRB, dont think ill need it but seems cool, can be used to start conversion on certain timer overflows or compares etc
+        a conversion can be triggered without an interrupt, so just the flag needed, but u need to clear it to detect another positive edge
+        go to read this parrt again to understand fully
+    
+    
+    NOTE: By degault, approximately 50 to 200kHz is needed to get max resolution, but if the lower than 10 bits is needed, the input clock freq can be higher than 200kHz to get a higher sample rate, will most likely do
+
+    Prescaling is set by the ADPS bits in ADCSRA. Able to generate any cpu freq above 100kHz (any?.. what abt 300MHz 🤨)
+    prescaler runs as long as ADEN is HIGH, resets when ADEN is LOW
+
+    normal conversion takes 13 ADC clock cycles, wonder how many ADC = CPU. Takes 25 the first time to actually initialize internal stuff
+
+    the internal 1.1v takes sometime to stabilize, so the first read might be wwrong
+
+*/

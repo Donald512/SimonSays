@@ -22,7 +22,7 @@ class Button{
         
         
     Button(u8 p);
-    void watch();
+    void watch(u32 now);
     bool wasPressed();
 };
 

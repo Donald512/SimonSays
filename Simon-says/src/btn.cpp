@@ -6,8 +6,8 @@ Button::Button(u8 p){
     pinMode(pin, INPUT_PULLUP);
 }
 
-void Button::watch(){ // put at top of loop
-    if (millis() - lastCheckedTime > debounceDelay){
+void Button::watch(u32 now){ // put at top of loop
+    if (now - lastCheckedTime > debounceDelay){
         bool currentState = dRead(pin);
         if (currentState != lastCheckedState){
             lastCheckedState = currentState;
@@ -16,7 +16,7 @@ void Button::watch(){ // put at top of loop
             }
         }
 
-        lastCheckedTime = millis();
+        lastCheckedTime = now;  // lean function, difference in old now (millis()) - new now is very tiny
     }
 }
 
