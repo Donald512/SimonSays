@@ -27,6 +27,7 @@ RAM:   [=         ]  11.0% (used 225 bytes from 2048 bytes)
 Flash: [=         ]  14.8% (used 4768 bytes from 32256 bytes)
 Which allows for more features like EEPROM high score saving, using PROGMEM to store digit patterns, Showing Words like "Press any button to start" on the 4 digit display
 <img width="2806" height="1984" alt="SimonSaysSchematic" src="https://github.com/user-attachments/assets/dae0296c-2060-4da7-8e96-b281524f399d" />
+This game also uses only 8 resistors for 39 Leds, which reduces breadboard space cramping by a lot
 
 Bug Log:
   The display multiplexing was first done with an ISR frequency of 62.5KHz, i.e: (10.42KHz per digit) and while this produced a very crsip display, it took all the CPU processing power and didnt allow loop() to run
