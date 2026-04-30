@@ -1,0 +1,16 @@
+# --- PlatformIO & IDE Junk ---
+.pio/
+.vscode/
+*.code-workspace
+lib/
+test/
+
+# --- Specific File Ignores ---
+simonSays/futureIdeas.txt
+simonSays/learned.txt
+simonSays/practice.cpp
+simonSays/analogBugTest.cpp
+simonSays
+
+# --- Keep the important stuff ---
+# (No need to ignore everything if you just specify what you DON'T want)
